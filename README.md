@@ -40,7 +40,7 @@ An evolving how-to guide for securing a Linux server that, hopefully, also teach
   - [Force Accounts To Use Secure Passwords](#force-accounts-to-use-secure-passwords)
   - [Automatic Security Updates and Alerts](#automatic-security-updates-and-alerts)
   - [More Secure Random Entropy Pool (WIP)](#more-secure-random-entropy-pool-wip)
-  - [Add Panic/Secondary/Fake password Login Security System](#add-panic-secondary-fake-password-login-security-system)
+  - [Add Panic/Secondary/Fake password Login Security System](#add-panicsecondaryfake-password-login-security-system)
 - [The Network](#the-network)
   - [Firewall With UFW (Uncomplicated Firewall)](#firewall-with-ufw-uncomplicated-firewall)
   - [iptables Intrusion Detection And Prevention with PSAD](#iptables-intrusion-detection-and-prevention-with-psad)
@@ -57,7 +57,7 @@ An evolving how-to guide for securing a Linux server that, hopefully, also teach
   - [OSSEC - Host Intrusion Detection](#ossec---host-intrusion-detection)
 - [The Danger Zone](#the-danger-zone)
 - [The Miscellaneous](#the-miscellaneous)
-  - [MSMTP (Simple Sendmail) with Google](#msmtp-alternative)
+  - [MSMTP (Simple Sendmail) with Google](#the-simple-way-with-msmtp)
   - [Gmail and Exim4 As MTA With Implicit TLS](#gmail-and-exim4-as-mta-with-implicit-tls)
   - [Separate iptables Log File](#separate-iptables-log-file)
 - [Left Over](#left-over)
@@ -516,7 +516,7 @@ SSH is a door into your server. This is especially true if you are opening ports
 
 1. Edit `/etc/ssh/sshd_config` then find and edit or add these settings that should be applied regardless of your configuration/setup:
 
-    **Note**: SSH does not like duplicate contradicting settings. For example, if you have `ChallengeResponseAuthentication no` and then `ChallengeResponseAuthentication yes`, SSH will respect the first one and ignore the second. Your `/etc/ssh/sshd_config` file may already have some of the settings/lines below. To avoid issues you will need to manually go through your `/etc/ssh/sshd_config` file and address any duplicate contradicting settings. 
+    **Note**: SSH does not like duplicate contradicting settings. For example, if you have `KbdInteractiveAuthentication no` and then `KbdInteractiveAuthentication yes`, SSH will respect the first one and ignore the second. Your `/etc/ssh/sshd_config` file may already have some of the settings/lines below. To avoid issues you will need to manually go through your `/etc/ssh/sshd_config` file and address any duplicate contradicting settings.
 
 	**Note:** If you are running OpenSSH 9.1 or later, uncomment the `RequiredRSASize 3072` line in the configuration below. This enforces a minimum RSA key size of 3072 bits and will reject smaller RSA keys during authentication. This only affects RSA keys. If you use ED25519 or ECDSA keys, you are not affected. You can check your key type and size with `ssh-keygen -l -f ~/.ssh/id_rsa`. On older OpenSSH versions, leave the line commented out as it will prevent sshd from starting.
    
@@ -590,8 +590,6 @@ SSH is a door into your server. This is especially true if you are opening ports
     # https://www.keylength.com/en/compare/
     # RequiredRSASize 3072
 
-    # https://github.com/imthenachoman/How-To-Secure-A-Linux-Server/issues/115
-    HashKnownHosts yes
     ```
 
 1. Then **find and edit or add** these settings, and set values as per your requirements:
@@ -605,7 +603,7 @@ SSH is a door into your server. This is especially true if you are opening ports
     |**LoginGraceTime**|number of seconds|`LoginGraceTime 30`|time in seconds before login times-out||
     |**MaxAuthTries**|number|`MaxAuthTries 2`|maximum allowed attempts to login||
     |**MaxSessions**|number|`MaxSessions 2`|maximum number of open sessions||
-    |**MaxStartups**|number|`MaxStartups 2`|maximum number of login sessions||
+    |**MaxStartups**|number or `start:rate:full`|`MaxStartups 10:30:60`|maximum number of unauthenticated SSH connections||
     |<a name="PasswordAuthentication"></a>**PasswordAuthentication**|`yes` or `no`|`PasswordAuthentication no`|if login with a password is allowed||
     |**Port**|any open/available port number|`Port 22`|port that `sshd` should listen on||
 
@@ -617,10 +615,16 @@ SSH is a door into your server. This is especially true if you are opening ports
     awk 'NF && $1!~/^(#|HostKey)/{print $1}' /etc/ssh/sshd_config | sort | uniq -c | grep -v ' 1 '
     ```
 
+1. Validate the OpenSSH server configuration before restarting:
+
+    ``` bash
+    sudo sshd -t
+    ```
+
 1. Restart ssh:
 
     ``` bash
-    sudo service sshd restart
+    sudo service ssh restart
     ```
 
 1. You can check verify the configurations worked with `sshd -T` and verify the output:
@@ -729,7 +733,8 @@ What we will do is tell the server's SSH PAM configuration to ask the user for t
 
 - Before you do this, you should have an idea of how 2FA/MFA works and you'll need an authenticator app on your phone to continue.
 - We'll use [google-authenticator-libpam](https://github.com/google/google-authenticator-libpam).
-- With the below configuration, a user will only need to enter their 2FA/MFA code if they are logging on with their password but **not** if they are using [SSH public/private keys](#ssh-publicprivate-keys). Check the documentation on how to change this behavior to suite your requirements.
+- With the below configuration, a user will only need to enter their 2FA/MFA code if they are logging on with their password but **not** if they are using [SSH public/private keys](#ssh-publicprivate-keys). If you want public key authentication to also require a TOTP code, configure `AuthenticationMethods` to require `keyboard-interactive` after `publickey`.
+- The `nullok` option lets users without a `~/.google_authenticator` file log in without a code. Remove `nullok` after all intended SSH users are enrolled if MFA must be mandatory for every account.
 
 #### References
 
@@ -819,20 +824,26 @@ What we will do is tell the server's SSH PAM configuration to ask the user for t
 1. Tell SSH to leverage it by adding or editing this line in `/etc/ssh/sshd_config`:
 
     ```
-    ChallengeResponseAuthentication yes
+    KbdInteractiveAuthentication yes
     ```
 
     [For the lazy](#editing-configuration-files---for-the-lazy):
 
     ``` bash
-    sudo sed -i -r -e "s/^(challengeresponseauthentication .*)$/# \1         # commented by $(whoami) on $(date +"%Y-%m-%d @ %H:%M:%S")/I" /etc/ssh/sshd_config
-    echo -e "\nChallengeResponseAuthentication yes         # added by $(whoami) on $(date +"%Y-%m-%d @ %H:%M:%S")" | sudo tee -a /etc/ssh/sshd_config
+    sudo sed -i -r -e "s/^(kbdinteractiveauthentication|challengeresponseauthentication)( .*)$/# \1\2         # commented by $(whoami) on $(date +"%Y-%m-%d @ %H:%M:%S")/I" /etc/ssh/sshd_config
+    echo -e "\nKbdInteractiveAuthentication yes         # added by $(whoami) on $(date +"%Y-%m-%d @ %H:%M:%S")" | sudo tee -a /etc/ssh/sshd_config
+    ```
+
+1. Validate the OpenSSH server configuration before restarting:
+
+    ``` bash
+    sudo sshd -t
     ```
 
 1. Restart ssh:
 
     ``` bash
-    sudo service sshd restart
+    sudo service ssh restart
     ```
 
 ([Table of Contents](#table-of-contents))
@@ -1272,7 +1283,7 @@ When there is a need to set or change an account password, the password task of 
     to this:
 
     ```
-    password        requisite                       pam_pwquality.so retry=3 minlen=10 difok=3 ucredit=-1 lcredit=-1 dcredit=-1 ocredit=-1 maxrepeat=3 gecoschec
+    password        requisite                       pam_pwquality.so retry=3 minlen=10 difok=3 ucredit=-1 lcredit=-1 dcredit=-1 ocredit=-1 maxrepeat=3 gecoscheck=1
     ```
 
    The above options are:
@@ -1285,13 +1296,13 @@ When there is a need to set or change an account password, the password task of 
        - `ocredit=-1` = must have at least **one non-alphanumeric character**
      - `difok=3` = at least 3 characters from the new password cannot have been in the old password
      - `maxrepeat=3` = allow a maximum of 3 repeated characters
-     - `gecoschec` = do not allow passwords with the account's name
+     - `gecoscheck=1` = do not allow passwords with the account's name
 
 
     [For the lazy](#editing-configuration-files---for-the-lazy):
     
     ``` bash
-    sudo sed -i -r -e "s/^(password\s+requisite\s+pam_pwquality.so)(.*)$/# \1\2         # commented by $(whoami) on $(date +"%Y-%m-%d @ %H:%M:%S")\n\1 retry=3 minlen=10 difok=3 ucredit=-1 lcredit=-1 dcredit=-1 ocredit=-1 maxrepeat=3 gecoschec         # added by $(whoami) on $(date +"%Y-%m-%d @ %H:%M:%S")/" /etc/pam.d/common-password
+    sudo sed -i -r -e "s/^(password\s+requisite\s+pam_pwquality.so)(.*)$/# \1\2         # commented by $(whoami) on $(date +"%Y-%m-%d @ %H:%M:%S")\n\1 retry=3 minlen=10 difok=3 ucredit=-1 lcredit=-1 dcredit=-1 ocredit=-1 maxrepeat=3 gecoscheck=1         # added by $(whoami) on $(date +"%Y-%m-%d @ %H:%M:%S")/" /etc/pam.d/common-password
     ```
 
 ([Table of Contents](#table-of-contents))
@@ -1376,9 +1387,10 @@ We will use unattended-upgrades to apply **critical security patches**. We can a
 
     // Automatically upgrade packages from these
     Unattended-Upgrade::Origins-Pattern {
-          "o=Debian,a=stable";
-          "o=Debian,a=stable-updates";
+          "origin=Debian,codename=${distro_codename},label=Debian";
+          "origin=Debian,codename=${distro_codename}-updates";
           "origin=Debian,codename=${distro_codename},label=Debian-Security";
+          "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
     };
 
     // You can specify your own packages to NOT automatically upgrade here
@@ -1660,7 +1672,8 @@ You can create rules by explicitly specifying the ports or with application conf
 1. Obviously we want SSH connections in. Using limit instead of allow will automatically deny connections from an IP address if it attempts to initiate 6 or more connections within a 30-second window:
 
     ``` bash
-    sudo ufw limit in ssh comment 'allow SSH connections in'
+    SSH_PORT="$(sudo sshd -T | awk '/^port / { print $2; exit }')"
+    sudo ufw limit in "${SSH_PORT}/tcp" comment 'allow SSH connections in'
     ```
 
     > ```
@@ -1887,7 +1900,7 @@ I can't explain it any better than user [FINESEC](https://serverfault.com/users/
 
 > Fail2BAN scans log files of various applications such as apache, ssh or ftp and automatically bans IPs that show the malicious signs such as automated login attempts. PSAD on the other hand scans iptables and ip6tables log messages (typically /var/log/messages) to detect and optionally block scans and other types of suspect traffic such as DDoS or OS fingerprinting attempts. It's ok to use both programs at the same time because they operate on different level.
 
-And, since we're already using [UFW](#ufw-uncomplicated-firewall) so we'll follow the awesome instructions by [netson](https://gist.github.com/netson) at https://gist.github.com/netson/c45b2dc4e835761fbccc to make PSAD work with UFW.
+And, since we're already using [UFW](#firewall-with-ufw-uncomplicated-firewall) so we'll follow the awesome instructions by [netson](https://gist.github.com/netson) at https://gist.github.com/netson/c45b2dc4e835761fbccc to make PSAD work with UFW.
 
 #### References
 
@@ -3514,7 +3527,6 @@ Keep in mind, deborphan finds packages that have **no package dependencies**. Th
 ## The Miscellaneous
 
 ### The Simple way with MSMTP
-(#msmtp-alternative)
 #### Why
 
 Well I will SIMPLIFY this method, to only output email using Google Mail account (and others). True Simple! :)
@@ -3792,7 +3804,7 @@ Also, as discussed in [issue #29](https://github.com/imthenachoman/How-To-Secure
     sudo service exim4 restart
     ```
 
-1. If you're using [UFW](#ufw-uncomplicated-firewall), you'll need to allow outbound traffic on 465. To do this we'll create a custom UFW application profile and then enable it. Create the file `/etc/ufw/applications.d/smtptls`, add this, then run `ufw allow out smtptls comment 'open TLS port 465 for use with SMPT to send e-mails'`:
+1. If you're using [UFW](#firewall-with-ufw-uncomplicated-firewall), you'll need to allow outbound traffic on 465. To do this we'll create a custom UFW application profile and then enable it. Create the file `/etc/ufw/applications.d/smtptls`, add this, then run `ufw allow out smtptls comment 'open TLS port 465 for use with SMPT to send e-mails'`:
 
     ```
     [SMTPTLS]
